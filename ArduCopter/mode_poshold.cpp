@@ -22,6 +22,7 @@
 // definitions that are independent of main loop rate
 #define POSHOLD_STICK_RELEASE_SMOOTH_ANGLE      1800    // max angle required (in centi-degrees) after which the smooth stick release effect is applied
 #define POSHOLD_WIND_COMP_ESTIMATE_SPEED_MAX    10      // wind compensation estimates will only run when velocity is at or below this speed in cm/s
+#define POSHOLD_WIND_COMP_LEAN_PCT_MAX          0.6666f // wind compensation no more than 2/3rds of angle max to ensure pilot can always override
 
 // poshold_init - initialise PosHold controller
 bool ModePosHold::init(bool ignore_checks)
@@ -58,10 +59,7 @@ bool ModePosHold::init(bool ignore_checks)
     loiter_nav->init_target();
 
     // initialise wind_comp each time PosHold is switched on
-    wind_comp_ef.zero();
-    wind_comp_timer = 0;
-    wind_comp_roll = 0.0f;
-    wind_comp_pitch = 0.0f;
+    init_wind_comp_estimate();
 
     return true;
 }
@@ -112,11 +110,14 @@ void ModePosHold::run()
         pos_control->relax_alt_hold_controllers(0.0f);   // forces throttle output to go to zero
         loiter_nav->clear_pilot_desired_acceleration();
         loiter_nav->init_target();
-        loiter_nav->update();
+        loiter_nav->update(false);
 
         // set poshold state to pilot override
         roll_mode = RPMode::PILOT_OVERRIDE;
         pitch_mode = RPMode::PILOT_OVERRIDE;
+
+        // initialise wind compensation estimate
+        init_wind_comp_estimate();
         break;
 
     case AltHold_Takeoff:
@@ -134,7 +135,7 @@ void ModePosHold::run()
         // init and update loiter although pilot is controlling lean angles
         loiter_nav->clear_pilot_desired_acceleration();
         loiter_nav->init_target();
-        loiter_nav->update();
+        loiter_nav->update(false);
 
         // set position controller targets
         pos_control->set_alt_target_from_climb_rate_ff(target_climb_rate, G_Dt, false);
@@ -148,12 +149,13 @@ void ModePosHold::run()
     case AltHold_Landed_Ground_Idle:
         loiter_nav->clear_pilot_desired_acceleration();
         loiter_nav->init_target();
-        loiter_nav->update();
+        loiter_nav->update(false);
         attitude_control->set_yaw_target_to_current_heading();
+        init_wind_comp_estimate();
         FALLTHROUGH;
 
     case AltHold_Landed_Pre_Takeoff:
-        attitude_control->reset_rate_controller_I_terms();
+        attitude_control->reset_rate_controller_I_terms_smoothly();
         pos_control->relax_alt_hold_controllers(0.0f);   // forces throttle output to go to zero
 
         // set poshold state to pilot override
@@ -163,11 +165,6 @@ void ModePosHold::run()
 
     case AltHold_Flying:
         motors->set_desired_spool_state(AP_Motors::DesiredSpoolState::THROTTLE_UNLIMITED);
-
-#if AC_AVOID_ENABLED == ENABLED
-        // apply avoidance
-        copter.avoid.adjust_roll_pitch(target_roll, target_pitch, copter.aparm.angle_max);
-#endif
 
         // adjust climb rate using rangefinder
         if (copter.rangefinder_alt_ok()) {
@@ -422,7 +419,7 @@ void ModePosHold::run()
                 update_brake_angle_from_velocity(brake_pitch, -vel_fw);
 
                 // run loiter controller
-                loiter_nav->update();
+                loiter_nav->update(false);
 
                 // calculate final roll and pitch output by mixing loiter and brake controls
                 roll = mix_controls(brake_to_loiter_mix, brake_roll + wind_comp_roll, loiter_nav->get_roll());
@@ -453,7 +450,7 @@ void ModePosHold::run()
 
             case RPMode::LOITER:
                 // run loiter controller
-                loiter_nav->update();
+                loiter_nav->update(false);
 
                 // set roll angle based on loiter controller outputs
                 roll = loiter_nav->get_roll();
@@ -561,6 +558,15 @@ void ModePosHold::update_brake_angle_from_velocity(float &brake_angle, float vel
     brake_angle = constrain_float(brake_angle, -(float)g.poshold_brake_angle_max, (float)g.poshold_brake_angle_max);
 }
 
+// initialise wind compensation estimate back to zero
+void ModePosHold::init_wind_comp_estimate()
+{
+    wind_comp_ef.zero();
+    wind_comp_timer = 0;
+    wind_comp_roll = 0.0f;
+    wind_comp_pitch = 0.0f;
+}
+
 // update_wind_comp_estimate - updates wind compensation estimate
 //  should be called at the maximum loop rate when loiter is engaged
 void ModePosHold::update_wind_comp_estimate()
@@ -595,6 +601,13 @@ void ModePosHold::update_wind_comp_estimate()
         // low pass filter the position controller's lean angle output
         wind_comp_ef.y = (1.0f-TC_WIND_COMP)*wind_comp_ef.y + TC_WIND_COMP*accel_target.y;
     }
+
+    // limit acceleration
+    const float accel_lim_cmss = tanf(radians(POSHOLD_WIND_COMP_LEAN_PCT_MAX * copter.aparm.angle_max * 0.01f)) * 981.0f;
+    const float wind_comp_ef_len = wind_comp_ef.length();
+    if (!is_zero(accel_lim_cmss) && (wind_comp_ef_len > accel_lim_cmss)) {
+        wind_comp_ef *= accel_lim_cmss / wind_comp_ef_len;
+    }
 }
 
 // get_wind_comp_lean_angles - retrieve wind compensation angles in body frame roll and pitch angles
@@ -609,8 +622,8 @@ void ModePosHold::get_wind_comp_lean_angles(float &roll_angle, float &pitch_angl
     wind_comp_timer = 0;
 
     // convert earth frame desired accelerations to body frame roll and pitch lean angles
-    roll_angle = atanf((-wind_comp_ef.x*ahrs.sin_yaw() + wind_comp_ef.y*ahrs.cos_yaw())/981.0f)*(18000.0f/M_PI);
-    pitch_angle = atanf(-(wind_comp_ef.x*ahrs.cos_yaw() + wind_comp_ef.y*ahrs.sin_yaw())/981.0f)*(18000.0f/M_PI);
+    roll_angle = atanf((-wind_comp_ef.x*ahrs.sin_yaw() + wind_comp_ef.y*ahrs.cos_yaw())/(GRAVITY_MSS*100))*(18000.0f/M_PI);
+    pitch_angle = atanf(-(wind_comp_ef.x*ahrs.cos_yaw() + wind_comp_ef.y*ahrs.sin_yaw())/(GRAVITY_MSS*100))*(18000.0f/M_PI);
 }
 
 // roll_controller_to_pilot_override - initialises transition from a controller submode (brake or loiter) to a pilot override on roll axis

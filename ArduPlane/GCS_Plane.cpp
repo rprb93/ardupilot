@@ -20,9 +20,6 @@ void GCS_Plane::update_vehicle_sensor_status_flags(void)
         control_sensors_enabled |= MAV_SYS_STATUS_SENSOR_OPTICAL_FLOW;
     }
 #endif
-    if (plane.geofence_present()) {
-        control_sensors_present |= MAV_SYS_STATUS_GEOFENCE;
-    }
 
     if (plane.have_reverse_thrust()) {
         control_sensors_present |= MAV_SYS_STATUS_REVERSE_MOTOR;
@@ -30,10 +27,6 @@ void GCS_Plane::update_vehicle_sensor_status_flags(void)
 
     if (airspeed && airspeed->enabled() && airspeed->use()) {
         control_sensors_enabled |= MAV_SYS_STATUS_SENSOR_DIFFERENTIAL_PRESSURE;
-    }
-
-    if (plane.geofence_enabled()) {
-        control_sensors_enabled |= MAV_SYS_STATUS_GEOFENCE;
     }
 
     control_sensors_present |=
@@ -83,6 +76,7 @@ void GCS_Plane::update_vehicle_sensor_status_flags(void)
     case Mode::Number::CIRCLE:
     case Mode::Number::TAKEOFF:
     case Mode::Number::QRTL:
+    case Mode::Number::THERMAL:
         rate_controlled = true;
         attitude_stabilized = true;
         control_sensors_enabled |= MAV_SYS_STATUS_SENSOR_YAW_POSITION;
@@ -114,11 +108,6 @@ void GCS_Plane::update_vehicle_sensor_status_flags(void)
     if (airspeed && airspeed->all_healthy()) {
         control_sensors_health |= MAV_SYS_STATUS_SENSOR_DIFFERENTIAL_PRESSURE;
     }
-#if GEOFENCE_ENABLED
-    if (!plane.geofence_breached()) {
-        control_sensors_health |= MAV_SYS_STATUS_GEOFENCE;
-    }
-#endif
 
     control_sensors_present |= MAV_SYS_STATUS_SENSOR_RC_RECEIVER;
     control_sensors_enabled |= MAV_SYS_STATUS_SENSOR_RC_RECEIVER;

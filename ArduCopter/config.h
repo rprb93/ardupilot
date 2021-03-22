@@ -46,8 +46,6 @@
  #define HIL_MODE        HIL_MODE_DISABLED
 #endif
 
-#define MAGNETOMETER ENABLED
-
 #ifndef ARMING_DELAY_SEC
     # define ARMING_DELAY_SEC 2.0f
 #endif
@@ -103,7 +101,7 @@
 #endif
 
 #ifndef RANGEFINDER_WPNAV_FILT_HZ
- # define RANGEFINDER_WPNAV_FILT_HZ   0.25f // filter frequency for rangefinder altitude provided to waypoint navigation class
+ # define RANGEFINDER_WPNAV_FILT_HZ   0.5f // filter frequency for rangefinder altitude provided to waypoint navigation class
 #endif
 
 #ifndef RANGEFINDER_TILT_CORRECTION         // by disable tilt correction for use of range finder data by EKF
@@ -150,9 +148,6 @@
 #ifndef FS_GCS
  # define FS_GCS                        DISABLED
 #endif
-#ifndef FS_GCS_TIMEOUT_MS
- # define FS_GCS_TIMEOUT_MS             5000    // gcs failsafe triggers after 5 seconds with no GCS heartbeat
-#endif
 
 // Radio failsafe while using RC_override
 #ifndef FS_RADIO_RC_OVERRIDE_TIMEOUT_MS
@@ -189,12 +184,6 @@
 
 #ifndef EKF_ORIGIN_MAX_DIST_M
  # define EKF_ORIGIN_MAX_DIST_M         50000   // EKF origin and waypoints (including home) must be within 50km
-#endif
-
-//////////////////////////////////////////////////////////////////////////////
-//  MAGNETOMETER
-#ifndef MAGNETOMETER
- # define MAGNETOMETER                   ENABLED
 #endif
 
 #ifndef COMPASS_CAL_STICK_GESTURE_TIME
@@ -237,7 +226,7 @@
 //////////////////////////////////////////////////////////////////////////////
 // winch support
 #ifndef WINCH_ENABLED
-# define WINCH_ENABLED DISABLED
+# define WINCH_ENABLED !HAL_MINIMIZE_FEATURES
 #endif
 
 //////////////////////////////////////////////////////////////////////////////
@@ -250,12 +239,6 @@
 // Parachute release
 #ifndef PARACHUTE
  # define PARACHUTE HAL_PARACHUTE_ENABLED
-#endif
-
-//////////////////////////////////////////////////////////////////////////////
-// ADSB support
-#ifndef ADSB_ENABLED
-# define ADSB_ENABLED !HAL_MINIMIZE_FEATURES
 #endif
 
 //////////////////////////////////////////////////////////////////////////////
@@ -395,6 +378,12 @@
 #endif
 
 //////////////////////////////////////////////////////////////////////////////
+// Landing Gear support
+#ifndef LANDING_GEAR_ENABLED
+ #define LANDING_GEAR_ENABLED ENABLED
+#endif
+
+//////////////////////////////////////////////////////////////////////////////
 // RADIO CONFIGURATION
 //////////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////////
@@ -480,14 +469,6 @@
 #ifndef CAMERA
  # define CAMERA        ENABLED
 #endif
-
-//////////////////////////////////////////////////////////////////////////////
-// MOUNT (ANTENNA OR CAMERA)
-//
-#ifndef MOUNT
- # define MOUNT         ENABLED
-#endif
-
 
 //////////////////////////////////////////////////////////////////////////////
 // Flight mode definitions
@@ -584,7 +565,7 @@
  # define ROLL_PITCH_YAW_INPUT_MAX      4500        // roll, pitch and yaw input range
 #endif
 #ifndef DEFAULT_ANGLE_MAX
- # define DEFAULT_ANGLE_MAX         4500            // ANGLE_MAX parameters default value
+ # define DEFAULT_ANGLE_MAX         3000            // ANGLE_MAX parameters default value
 #endif
 #ifndef ANGLE_RATE_MAX
  # define ANGLE_RATE_MAX            18000           // default maximum rotation rate in roll/pitch axis requested by angle controller used in stabilize, loiter, rtl, auto flight modes
@@ -739,7 +720,7 @@
   #error SmartRTL requires ModeRTL which is disabled
 #endif
 
-#if ADSB_ENABLED && !MODE_GUIDED_ENABLED
+#if HAL_ADSB_ENABLED && !MODE_GUIDED_ENABLED
   #error ADSB requires ModeGuided which is disabled
 #endif
 

@@ -90,11 +90,16 @@ void Copter::read_rangefinder(void)
             rf_state.last_healthy_ms = now;
         }
 
-        // send downward facing lidar altitude and health to waypoint and circle navigation libraries
+        // send downward facing lidar altitude and health to the libraries that require it
         if (rf_orient == ROTATION_PITCH_270) {
             if (rangefinder_state.alt_healthy || timed_out) {
                 wp_nav->set_rangefinder_alt(rangefinder_state.enabled, rangefinder_state.alt_healthy, rangefinder_state.alt_cm_filt.get());
+#if MODE_CIRCLE_ENABLED
                 circle_nav->set_rangefinder_alt(rangefinder_state.enabled && wp_nav->rangefinder_used(), rangefinder_state.alt_healthy, rangefinder_state.alt_cm_filt.get());
+#endif
+#if PROXIMITY_ENABLED == ENABLED
+                g2.proximity.set_rangefinder_alt(rangefinder_state.enabled, rangefinder_state.alt_healthy, rangefinder_state.alt_cm_filt.get());
+#endif
             }
         }
     }
@@ -113,13 +118,13 @@ void Copter::read_rangefinder(void)
 }
 
 // return true if rangefinder_alt can be used
-bool Copter::rangefinder_alt_ok()
+bool Copter::rangefinder_alt_ok() const
 {
     return (rangefinder_state.enabled && rangefinder_state.alt_healthy);
 }
 
 // return true if rangefinder_alt can be used
-bool Copter::rangefinder_up_ok()
+bool Copter::rangefinder_up_ok() const
 {
     return (rangefinder_up_state.enabled && rangefinder_up_state.alt_healthy);
 }
@@ -221,23 +226,5 @@ void Copter::init_proximity(void)
 {
 #if PROXIMITY_ENABLED == ENABLED
     g2.proximity.init();
-#endif
-}
-
-// winch and wheel encoder initialisation
-void Copter::winch_init()
-{
-#if WINCH_ENABLED == ENABLED
-    g2.wheel_encoder.init();
-    g2.winch.init(&g2.wheel_encoder);
-#endif
-}
-
-// winch and wheel encoder update
-void Copter::winch_update()
-{
-#if WINCH_ENABLED == ENABLED
-    g2.wheel_encoder.update();
-    g2.winch.update();
 #endif
 }

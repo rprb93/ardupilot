@@ -297,6 +297,7 @@ bool AP_Mission::verify_command(const Mission_Command& cmd)
     case MAV_CMD_DO_DIGICAM_CONTROL:
     case MAV_CMD_DO_SET_CAM_TRIGG_DIST:
     case MAV_CMD_DO_PARACHUTE:
+    case MAV_CMD_DO_SPRAYER:
     case MAV_CMD_DO_SET_RESUME_REPEAT_DIST:
         return true;
     default:
@@ -327,6 +328,8 @@ bool AP_Mission::start_command(const Mission_Command& cmd)
         return start_command_camera(cmd);
     case MAV_CMD_DO_PARACHUTE:
         return start_command_parachute(cmd);
+    case MAV_CMD_DO_SPRAYER:
+        return start_command_do_sprayer(cmd);
     case MAV_CMD_DO_SET_RESUME_REPEAT_DIST:
         return command_do_set_repeat_dist(cmd);
     default:
@@ -513,7 +516,7 @@ bool AP_Mission::set_item(uint16_t index, mavlink_mission_item_int_t& src_packet
     AP_Mission::Mission_Command cmd;
 
     // can't handle request for anything bigger than the mission size+1...
-    if (index > num_commands() ) {
+    if (index > num_commands()) {
         return false;
     }
 
@@ -524,15 +527,15 @@ bool AP_Mission::set_item(uint16_t index, mavlink_mission_item_int_t& src_packet
 
     // A request to set the 'next' item after the end is how we add an extra
     //  item to the list, thus allowing us to write entire missions if needed.
-    if (index == num_commands() ) {
-        return add_cmd( cmd);
+    if (index == num_commands()) {
+        return add_cmd(cmd);
     }
 
     // replacing an existing mission item...
-    return AP_Mission::replace_cmd( index, cmd);
+    return AP_Mission::replace_cmd(index, cmd);
 }
 
-bool AP_Mission::get_item(uint16_t index, mavlink_mission_item_int_t& ret_packet)
+bool AP_Mission::get_item(uint16_t index, mavlink_mission_item_int_t& ret_packet) const
 {
     // setting ret_packet.command = -1  and/or returning false
     //  means it contains invalid data after it leaves here.
@@ -541,7 +544,7 @@ bool AP_Mission::get_item(uint16_t index, mavlink_mission_item_int_t& ret_packet
     AP_Mission::Mission_Command cmd;
 
     // can't handle request for anything bigger than the mission size...
-    if (index >= num_commands() ) {
+    if (index >= num_commands()) {
         ret_packet.command = -1;
         return false;
     }
@@ -622,9 +625,8 @@ bool AP_Mission::read_cmd_from_storage(uint16_t index, Mission_Command& cmd) con
 
     // special handling for command #0 which is home
     if (index == 0) {
-        cmd.index = 0;
+        cmd = {};
         cmd.id = MAV_CMD_NAV_WAYPOINT;
-        cmd.p1 = 0;
         cmd.content.location = AP::ahrs().get_home();
         return true;
     }
@@ -632,6 +634,9 @@ bool AP_Mission::read_cmd_from_storage(uint16_t index, Mission_Command& cmd) con
     if (index >= (unsigned)_cmd_total) {
         return false;
     }
+
+    // ensure all bytes of cmd are zeroed
+    cmd = {};
 
     // Find out proper location in memory by using the start_byte position + the index
     // we can load a command, we don't process it yet
@@ -946,7 +951,7 @@ MAV_MISSION_RESULT AP_Mission::mavlink_int_to_mission_cmd(const mavlink_mission_
     case MAV_CMD_DO_CHANGE_SPEED:                       // MAV ID: 178
         cmd.content.speed.speed_type = packet.param1;   // 0 = airspeed, 1 = ground speed
         cmd.content.speed.target_ms = packet.param2;    // target speed in m/s
-        cmd.content.speed.throttle_pct = packet.param3; // throttle as a percentage from 0 ~ 100%
+        cmd.content.speed.throttle_pct = packet.param3; // throttle as a percentage from 1 ~ 100%
         break;
 
     case MAV_CMD_DO_SET_HOME:
@@ -1089,6 +1094,10 @@ MAV_MISSION_RESULT AP_Mission::mavlink_int_to_mission_cmd(const mavlink_mission_
 
     case MAV_CMD_DO_SET_RESUME_REPEAT_DIST:
         cmd.p1 = packet.param1; // Resume repeat distance (m)
+        break;
+
+    case MAV_CMD_DO_SPRAYER:
+        cmd.p1 = packet.param1;                        // action 0=disable, 1=enable
         break;
 
     default:
@@ -1386,7 +1395,7 @@ bool AP_Mission::mission_cmd_to_mavlink_int(const AP_Mission::Mission_Command& c
     case MAV_CMD_DO_CHANGE_SPEED:                       // MAV ID: 178
         packet.param1 = cmd.content.speed.speed_type;   // 0 = airspeed, 1 = ground speed
         packet.param2 = cmd.content.speed.target_ms;    // speed in m/s
-        packet.param3 = cmd.content.speed.throttle_pct; // throttle as a percentage from 0 ~ 100%
+        packet.param3 = cmd.content.speed.throttle_pct; // throttle as a percentage from 1 ~ 100%
         break;
 
     case MAV_CMD_DO_SET_HOME:                           // MAV ID: 179
@@ -1464,6 +1473,10 @@ bool AP_Mission::mission_cmd_to_mavlink_int(const AP_Mission::Mission_Command& c
         packet.param1 = cmd.p1;                         // action 0=disable, 1=enable, 2=release.  See PARACHUTE_ACTION enum
         break;
 
+    case MAV_CMD_DO_SPRAYER:
+        packet.param1 = cmd.p1;                         // action 0=disable, 1=enable
+        break;
+
     case MAV_CMD_DO_INVERTED_FLIGHT:                    // MAV ID: 210
         packet.param1 = cmd.p1;                         // normal=0 inverted=1
         break;
@@ -1511,7 +1524,7 @@ bool AP_Mission::mission_cmd_to_mavlink_int(const AP_Mission::Mission_Command& c
         break;
 
     case MAV_CMD_NAV_PAYLOAD_PLACE:
-        packet.param1 = cmd.p1/100.0f; // copy max-descend parameter (m->cm)
+        packet.param1 = cmd.p1/100.0f; // copy max-descend parameter (cm->m)
         break;
 
     case MAV_CMD_NAV_SET_YAW_SPEED:
@@ -1646,7 +1659,7 @@ bool AP_Mission::advance_current_nav_cmd(uint16_t starting_index)
                 _flags.nav_cmd_loaded = true;
             }
             // save a loaded wp index in history array for when _repeat_dist is set via MAV_CMD_DO_SET_RESUME_REPEAT_DIST
-            // and prevent history being re-written until vehicle returns to interupted position
+            // and prevent history being re-written until vehicle returns to interrupted position
             if (_repeat_dist > 0 && !_flags.resuming_mission && _nav_cmd.index != AP_MISSION_CMD_INDEX_NONE && !(_nav_cmd.content.location.lat == 0 && _nav_cmd.content.location.lng == 0)) {
                 // update mission history. last index position is always the most recent wp loaded.
                 for (uint8_t i=0; i<AP_MISSION_MAX_WP_HISTORY-1; i++) {
@@ -1654,10 +1667,10 @@ bool AP_Mission::advance_current_nav_cmd(uint16_t starting_index)
                 }
                 _wp_index_history[AP_MISSION_MAX_WP_HISTORY-1] = _nav_cmd.index;
             }
-            // check if the vehicle is resuming and has returned to where it was interupted
+            // check if the vehicle is resuming and has returned to where it was interrupted
             if (_flags.resuming_mission && _nav_cmd.index == _wp_index_history[AP_MISSION_MAX_WP_HISTORY-1]) {
                 // vehicle has resumed previous position
-                gcs().send_text(MAV_SEVERITY_INFO, "Mission: Returned to interupted WP");
+                gcs().send_text(MAV_SEVERITY_INFO, "Mission: Returned to interrupted WP");
                 _flags.resuming_mission = false;
             }
 
@@ -1915,7 +1928,7 @@ uint16_t AP_Mission::num_commands_max(void) const
 // find the nearest landing sequence starting point (DO_LAND_START) and
 // return its index.  Returns 0 if no appropriate DO_LAND_START point can
 // be found.
-uint16_t AP_Mission::get_landing_sequence_start()
+uint16_t AP_Mission::get_landing_sequence_start() const
 {
     struct Location current_loc;
 
@@ -2230,8 +2243,12 @@ const char *AP_Mission::Mission_Command::type() const
         return "PayloadPlace";
     case MAV_CMD_DO_PARACHUTE:
         return "Parachute";
+    case MAV_CMD_DO_SPRAYER:
+        return "Sprayer";
     case MAV_CMD_DO_MOUNT_CONTROL:
         return "MountControl";
+    case MAV_CMD_DO_WINCH:
+        return "Winch";
 
     default:
 #if CONFIG_HAL_BOARD == HAL_BOARD_SITL

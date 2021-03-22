@@ -1,12 +1,14 @@
-FROM ubuntu:18.04
+FROM ubuntu:20.04
 WORKDIR /ardupilot
 
+ARG DEBIAN_FRONTEND=noninteractive
 RUN useradd -U -m ardupilot && \
     usermod -G users ardupilot
 
-RUN DEBIAN_FRONTEND=noninteractive apt-get update && apt-get install --no-install-recommends -y \
+RUN apt-get update && apt-get install --no-install-recommends -y \
     lsb-release \
     sudo \
+    bash-completion \
     software-properties-common
 
 COPY Tools/environment_install/install-prereqs-ubuntu.sh /ardupilot/Tools/environment_install/
@@ -31,8 +33,11 @@ RUN echo "alias waf=\"/ardupilot/waf\"" >> ~/.bashrc
 # Check that local/bin are in PATH for pip --user installed package
 RUN echo "if [ -d \"\$HOME/.local/bin\" ] ; then\nPATH=\"\$HOME/.local/bin:\$PATH\"\nfi" >> ~/.bashrc
 
+# Set the buildlogs directory into /tmp as other directory aren't accessible
+ENV BUILDLOGS=/tmp/buildlogs
+
 # Cleanup
-RUN DEBIAN_FRONTEND=noninteractive sudo apt-get clean \
+RUN sudo apt-get clean \
     && sudo rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
 ENV CCACHE_MAXSIZE=1G

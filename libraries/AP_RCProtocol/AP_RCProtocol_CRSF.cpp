@@ -80,11 +80,14 @@ static const char* get_frame_type(uint8_t byte)
         return "ATTITUDE";
     case AP_RCProtocol_CRSF::CRSF_FRAMETYPE_FLIGHT_MODE:
         return "FLIGHT_MODE";
+    case AP_RCProtocol_CRSF::CRSF_FRAMETYPE_PARAM_DEVICE_INFO:
+        return "DEVICE_INFO";
+    case AP_RCProtocol_CRSF::CRSF_FRAMETYPE_PARAMETER_READ:
+        return "PARAM_READ";
+    case AP_RCProtocol_CRSF::CRSF_FRAMETYPE_PARAMETER_SETTINGS_ENTRY:
+        return "SETTINGS_ENTRY";
     case AP_RCProtocol_CRSF::CRSF_FRAMETYPE_LINK_STATISTICS:
     case AP_RCProtocol_CRSF::CRSF_FRAMETYPE_RC_CHANNELS_PACKED:
-    case AP_RCProtocol_CRSF::CRSF_FRAMETYPE_PARAM_DEVICE_INFO:
-    case AP_RCProtocol_CRSF::CRSF_FRAMETYPE_PARAMETER_SETTINGS_ENTRY:
-    case AP_RCProtocol_CRSF::CRSF_FRAMETYPE_PARAMETER_READ:
     case AP_RCProtocol_CRSF::CRSF_FRAMETYPE_PARAMETER_WRITE:
         return "UNKNOWN";
     }
@@ -95,7 +98,8 @@ static const char* get_frame_type(uint8_t byte)
 #endif
 
 #define CRSF_MAX_FRAME_TIME_US      1100U // 700us + 400us for potential ad-hoc request
-#define CRSF_INTER_FRAME_TIME_US_150HZ    6667U // At fastest, frames are sent by the transmitter every 6.667 ms, 150 Hz
+#define CRSF_INTER_FRAME_TIME_US_250HZ    4000U // At fastest, frames are sent by the transmitter every 4 ms, 250 Hz
+#define CRSF_INTER_FRAME_TIME_US_150HZ    6667U // At medium, frames are sent by the transmitter every 6.667 ms, 150 Hz
 #define CRSF_INTER_FRAME_TIME_US_50HZ    20000U // At slowest, frames are sent by the transmitter every 20ms, 50 Hz
 #define CSRF_HEADER_LEN     2
 
@@ -184,12 +188,6 @@ void AP_RCProtocol_CRSF::_process_byte(uint32_t timestamp_us, uint8_t byte)
     if (_frame_ofs == _frame.length + CSRF_HEADER_LEN) {
         log_data(AP_RCProtocol::CRSF, timestamp_us, (const uint8_t*)&_frame, _frame_ofs - CSRF_HEADER_LEN);
 
-        if ((timestamp_us - _last_frame_time_us) <= CRSF_INTER_FRAME_TIME_US_150HZ + CRSF_MAX_FRAME_TIME_US) {
-            _fast_telem = true;
-        } else {
-            _fast_telem = false;
-        }
-
         // we consumed the partial frame, reset
         _frame_ofs = 0;
 
@@ -206,9 +204,9 @@ void AP_RCProtocol_CRSF::_process_byte(uint32_t timestamp_us, uint8_t byte)
         _last_frame_time_us = timestamp_us;
         // decode here
         if (decode_csrf_packet()) {
-            add_input(MAX_CHANNELS, _channels, false, -1);
+            add_input(MAX_CHANNELS, _channels, false, _link_status.rssi);
         }
-    }    
+    }
 }
 
 void AP_RCProtocol_CRSF::update(void)
@@ -233,7 +231,7 @@ void AP_RCProtocol_CRSF::update(void)
 
     // never received RC frames, but have received CRSF frames so make sure we give the telemetry opportunity to run
     uint32_t now = AP_HAL::micros();
-    if (_last_frame_time_us > 0 && !get_rc_frame_count() && now - _last_frame_time_us > CRSF_INTER_FRAME_TIME_US_150HZ) {
+    if (_last_frame_time_us > 0 && !get_rc_frame_count() && now - _last_frame_time_us > CRSF_INTER_FRAME_TIME_US_250HZ) {
         process_telemetry(false);
         _last_frame_time_us = now;
     }
@@ -259,7 +257,12 @@ void AP_RCProtocol_CRSF::write_frame(Frame* frame)
 #ifdef CRSF_DEBUG
     hal.console->printf("CRSF: writing %s:", get_frame_type(frame->type));
     for (uint8_t i = 0; i < frame->length + 2; i++) {
-        hal.console->printf(" 0x%x", ((uint8_t*)frame)[i]);
+        uint8_t val = ((uint8_t*)frame)[i];
+        if (val >= 32 && val <= 126) {
+            hal.console->printf(" 0x%x '%c'", val, (char)val);
+        } else {
+            hal.console->printf(" 0x%x", val);
+        }
     }
     hal.console->printf("\n");
 #endif
@@ -283,6 +286,9 @@ bool AP_RCProtocol_CRSF::decode_csrf_packet()
             // scale factors defined by TBS - TICKS_TO_US(x) ((x - 992) * 5 / 8 + 1500)
             decode_11bit_channels((const uint8_t*)(&_frame.payload), CRSF_MAX_CHANNELS, _channels, 5U, 8U, 880U);
             rc_active = !_uart; // only accept RC data if we are not in standalone mode
+            break;
+        case CRSF_FRAMETYPE_LINK_STATISTICS:
+            process_link_stats_frame((uint8_t*)&_frame.payload);
             break;
         default:
             break;
@@ -317,24 +323,35 @@ bool AP_RCProtocol_CRSF::process_telemetry(bool check_constraint)
         return false;
 #endif
     }
-    /*
-      check that we haven't been too slow in responding to the new
-      UART data. If we respond too late then we will corrupt the next
-      incoming control frame
-     */
-    uint64_t tend = uart->receive_time_constraint_us(1);
-    uint64_t now = AP_HAL::micros64();
-    uint64_t tdelay = now - tend;
-    if (tdelay > CRSF_MAX_FRAME_TIME_US && check_constraint) {
-        // we've been too slow in responding
-        return false;
-    }
-
     write_frame(&_telemetry_frame);
     // get fresh telem_data in the next call
     telem_available = false;
 
     return true;
+}
+
+// process link statistics to get RSSI
+void AP_RCProtocol_CRSF::process_link_stats_frame(const void* data)
+{
+    const LinkStatisticsFrame* link = (const LinkStatisticsFrame*)data;
+
+    uint8_t rssi_dbm;
+    if (link->active_antenna == 0) {
+        rssi_dbm = link->uplink_rssi_ant1;
+    } else {
+        rssi_dbm = link->uplink_rssi_ant2;
+    }
+     // AP rssi: -1 for unknown, 0 for no link, 255 for maximum link
+    if (rssi_dbm < 50) {
+        _link_status.rssi = 255;
+    } else if (rssi_dbm > 120) {
+        _link_status.rssi = 0;
+    } else {
+        // this is an approximation recommended by Remo from TBS
+        _link_status.rssi = int16_t(roundf((1.0f - (rssi_dbm - 50.0f) / 70.0f) * 255.0f));
+    }
+
+    _link_status.rf_mode = static_cast<RFMode>(MIN(link->rf_mode, 3U));
 }
 
 // process a byte provided by a uart
@@ -353,7 +370,6 @@ void AP_RCProtocol_CRSF::start_uart()
     _uart->configure_parity(0);
     _uart->set_stop_bits(1);
     _uart->set_flow_control(AP_HAL::UARTDriver::FLOW_CONTROL_DISABLE);
-    _uart->set_unbuffered_writes(true);
     _uart->set_blocking_writes(false);
     _uart->set_options(_uart->get_options() & ~AP_HAL::UARTDriver::OPTION_RXINV);
     _uart->begin(CRSF_BAUDRATE, 128, 128);
@@ -364,4 +380,3 @@ namespace AP {
         return AP_RCProtocol_CRSF::get_singleton();
     }
 };
-

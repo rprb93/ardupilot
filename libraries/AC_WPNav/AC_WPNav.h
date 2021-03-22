@@ -11,10 +11,10 @@
 #include <AC_Avoidance/AC_Avoid.h>                 // Stop at fence library
 
 // maximum velocities and accelerations
-#define WPNAV_ACCELERATION              100.0f      // defines the default velocity vs distant curve.  maximum acceleration in cm/s/s that position controller asks for from acceleration controller
+#define WPNAV_ACCELERATION              250.0f      // maximum horizontal acceleration in cm/s/s that wp navigation will request
 #define WPNAV_ACCELERATION_MIN           50.0f      // minimum acceleration in cm/s/s - used for sanity checking _wp_accel parameter
 
-#define WPNAV_WP_SPEED                  500.0f      // default horizontal speed between waypoints in cm/s
+#define WPNAV_WP_SPEED                 1000.0f      // default horizontal speed between waypoints in cm/s
 #define WPNAV_WP_SPEED_MIN               20.0f      // minimum horizontal speed between waypoints in cm/s
 #define WPNAV_WP_TRACK_SPEED_MIN         50.0f      // minimum speed along track of the target point the vehicle is chasing in cm/s (used as target slows down before reaching destination)
 #define WPNAV_WP_RADIUS                 200.0f      // default waypoint radius in cm
@@ -97,7 +97,9 @@ public:
     /// get_wp_acceleration - returns acceleration in cm/s/s during missions
     float get_wp_acceleration() const { return _wp_accel_cmss.get(); }
 
-    /// get_wp_destination waypoint using position vector (distance from ekf origin in cm)
+    /// get_wp_destination waypoint using position vector
+    /// x,y are distance from ekf origin in cm
+    /// z may be cm above ekf origin or terrain (see origin_and_destination_are_terrain_alt method)
     const Vector3f &get_wp_destination() const { return _destination; }
 
     /// get origin using position vector (distance from ekf origin in cm)
@@ -219,9 +221,6 @@ public:
     ///     seg_end_type should be set to stopped, straight or spline depending upon the next segment's type
     ///     next_destination should be set to the next segment's destination if the seg_end_type is SEGMENT_END_STRAIGHT or SEGMENT_END_SPLINE
     bool set_spline_origin_and_destination(const Vector3f& origin, const Vector3f& destination, bool terrain_alt, bool stopped_at_start, spline_segment_end_type seg_end_type, const Vector3f& next_destination);
-
-    /// reached_spline_destination - true when we have come within RADIUS cm of the waypoint
-    bool reached_spline_destination() const { return _flags.reached_destination; }
 
     /// update_spline - update spline controller
     bool update_spline();

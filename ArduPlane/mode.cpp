@@ -64,6 +64,9 @@ bool Mode::enter()
     plane.auto_state.vtol_mode = false;
     plane.auto_state.vtol_loiter = false;
 
+    // initialize speed variable used in AUTO and GUIDED for DO_CHANGE_SPEED commands
+    plane.new_airspeed_cm = -1;
+
     bool enter_result = _enter();
 
     if (enter_result) {
@@ -71,9 +74,10 @@ bool Mode::enter()
         // these must be done AFTER _enter() because they use the results to set more flags
 
         // start with throttle suppressed in auto_throttle modes
-        plane.throttle_suppressed = plane.auto_throttle_mode;
-
-        plane.adsb.set_is_auto_mode(plane.auto_navigation_mode);
+        plane.throttle_suppressed = does_auto_throttle();
+#if HAL_ADSB_ENABLED
+        plane.adsb.set_is_auto_mode(does_auto_navigation());
+#endif
 
         // reset steering integrator on mode change
         plane.steerController.reset_I();
@@ -85,3 +89,15 @@ bool Mode::enter()
     return enter_result;
 }
 
+bool Mode::is_vtol_man_throttle() const
+{
+    if (plane.quadplane.is_tailsitter_in_fw_flight() &&
+        plane.quadplane.assisted_flight) {
+        // We are a tailsitter that has fully transitioned to Q-assisted forward flight.
+        // In this case the forward throttle directly drives the vertical throttle so
+        // set vertical throttle state to match the forward throttle state. Confusingly the booleans are inverted,
+        // forward throttle uses 'does_auto_throttle' whereas vertical uses 'is_vtol_man_throttle'.
+        return !does_auto_throttle();
+    }
+    return false;
+}
